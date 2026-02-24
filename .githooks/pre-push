@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+current_branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
+
+if [[ "$current_branch" == "main" ]]; then
+  echo "❌ Direct pushes to main are blocked locally."
+  echo "Create a feature branch and open a PR instead."
+  exit 1
+fi
+
+exit 0
