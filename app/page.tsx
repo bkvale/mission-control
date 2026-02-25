@@ -20,7 +20,15 @@ type CronJob = {
 };
 
 type CronPayload = { jobs?: CronJob[]; error?: string };
-type XPayload = { text?: string; error?: string };
+type XPayload = {
+  text?: string;
+  error?: string;
+  methodUsed?: "fast" | "dynamic" | "stealth" | null;
+  attempts?: Array<{ method: string; outcome: string; reason?: string; durationMs: number }>;
+  blockedReason?: string | null;
+  confidence?: "high" | "medium" | "low";
+  operatorHint?: string;
+};
 
 type Task = {
   id: string;
@@ -380,6 +388,27 @@ export default function Home() {
         </div>
 
         {xResult?.error ? <p className="mt-3 text-sm text-red-600">{xResult.error}</p> : null}
+
+        {(xResult?.attempts?.length || xResult?.methodUsed) ? (
+          <div className="mt-3 rounded border p-3 text-xs">
+            <div className="font-semibold">Ingestion diagnostics</div>
+            <div className="mt-1">Method used: {xResult?.methodUsed || "none"}</div>
+            <div>Confidence: {xResult?.confidence || "low"}</div>
+            {xResult?.blockedReason ? <div className="text-amber-700">Blocked reason: {xResult.blockedReason}</div> : null}
+            {xResult?.operatorHint ? <div className="text-amber-700">Hint: {xResult.operatorHint}</div> : null}
+            {xResult?.attempts?.length ? (
+              <ul className="mt-2 space-y-1">
+                {xResult.attempts.map((a, i) => (
+                  <li key={`${a.method}-${i}`} className="rounded border p-2">
+                    <strong>{a.method}</strong> → {a.outcome} ({a.durationMs}ms)
+                    {a.reason ? ` • ${a.reason}` : ""}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+
         {xResult?.text ? <textarea className="mt-3 h-80 w-full rounded border p-3 text-sm" readOnly value={xResult.text} /> : null}
       </section>
 

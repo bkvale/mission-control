@@ -23,7 +23,17 @@ export type Job = {
 export type JobEvent = {
   id: string;
   jobId: string;
-  type: "created" | "updated" | "deleted" | "approval_required" | "approved" | "status_changed";
+  type:
+    | "created"
+    | "updated"
+    | "deleted"
+    | "approval_required"
+    | "approved"
+    | "status_changed"
+    | "ingest_attempt"
+    | "ingest_fallback"
+    | "ingest_success"
+    | "ingest_failed";
   message: string;
   at: string;
 };
