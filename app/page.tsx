@@ -7,7 +7,6 @@ type StatusPayload = {
   status?: {
     gateway?: { reachable?: boolean; url?: string };
     linkChannel?: { id?: string; linked?: boolean };
-    channelSummary?: string[];
   };
   stderr?: string | null;
   error?: string;
@@ -21,7 +20,6 @@ type CronJob = {
 };
 
 type CronPayload = { jobs?: CronJob[]; error?: string };
-
 type XPayload = { text?: string; error?: string };
 
 type Task = {
@@ -29,10 +27,26 @@ type Task = {
   title: string;
   owner: "Ben" | "Syl";
   status: "Inbox" | "Planned" | "In Progress" | "Waiting" | "Done";
+  priority: "P0" | "P1" | "P2" | "P3";
+  sourceUrl?: string;
+  blockers?: string;
+  outputs: string[];
+  needsApproval: boolean;
+  approved: boolean;
   createdAt: string;
+  updatedAt: string;
+};
+
+type Event = {
+  id: string;
+  jobId: string;
+  type: string;
+  message: string;
+  at: string;
 };
 
 const STATUSES: Task["status"][] = ["Inbox", "Planned", "In Progress", "Waiting", "Done"];
+const PRIORITIES: Task["priority"][] = ["P0", "P1", "P2", "P3"];
 
 export default function Home() {
   const [status, setStatus] = useState<StatusPayload | null>(null);
@@ -41,8 +55,12 @@ export default function Home() {
   const [xResult, setXResult] = useState<XPayload | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [events, setEvents] = useState<Event[]>([]);
   const [taskTitle, setTaskTitle] = useState("");
   const [taskOwner, setTaskOwner] = useState<"Ben" | "Syl">("Syl");
+  const [taskPriority, setTaskPriority] = useState<Task["priority"]>("P1");
+  const [taskSourceUrl, setTaskSourceUrl] = useState("");
+
   const [memoryFiles, setMemoryFiles] = useState<string[]>([]);
   const [selectedMemoryPath, setSelectedMemoryPath] = useState("MEMORY.md");
   const [memoryContent, setMemoryContent] = useState("");
@@ -82,29 +100,43 @@ export default function Home() {
     setTasks(json.tasks || []);
   };
 
+  const loadEvents = async () => {
+    const res = await fetch("/api/events?limit=80");
+    const json = await res.json();
+    setEvents(json.events || []);
+  };
+
   const addTask = async () => {
     if (!taskTitle.trim()) return;
     await fetch("/api/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: taskTitle, owner: taskOwner }),
+      body: JSON.stringify({
+        title: taskTitle,
+        owner: taskOwner,
+        priority: taskPriority,
+        sourceUrl: taskSourceUrl,
+      }),
     });
     setTaskTitle("");
-    await loadTasks();
+    setTaskSourceUrl("");
+    await Promise.all([loadTasks(), loadEvents()]);
   };
 
   const updateTask = async (id: string, patch: Partial<Task>) => {
-    await fetch(`/api/tasks/${id}`, {
+    const res = await fetch(`/api/tasks/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
-    await loadTasks();
+    const json = await res.json();
+    if (json.error) alert(json.error);
+    await Promise.all([loadTasks(), loadEvents()]);
   };
 
   const deleteTask = async (id: string) => {
     await fetch(`/api/tasks/${id}`, { method: "DELETE" });
-    await loadTasks();
+    await Promise.all([loadTasks(), loadEvents()]);
   };
 
   const runCronNow = async (id: string) => {
@@ -149,6 +181,7 @@ export default function Home() {
     void loadStatus();
     void loadCron();
     void loadTasks();
+    void loadEvents();
     void loadMemoryFiles();
   }, []);
 
@@ -161,13 +194,49 @@ export default function Home() {
     const map = new Map<Task["status"], Task[]>();
     for (const s of STATUSES) map.set(s, []);
     for (const t of tasks) map.get(t.status)?.push(t);
+    for (const s of STATUSES) {
+      map.set(
+        s,
+        (map.get(s) || []).sort((a, b) => PRIORITIES.indexOf(a.priority) - PRIORITIES.indexOf(b.priority)),
+      );
+    }
     return map;
   }, [tasks]);
 
+  const healthItems = [
+    {
+      name: "Gateway",
+      healthy: Boolean(status?.status?.gateway?.reachable),
+      detail: status?.status?.gateway?.url || "No URL",
+    },
+    {
+      name: "X Ingestion",
+      healthy: !xResult?.error,
+      detail: xResult?.error || "No recent extraction error",
+    },
+    {
+      name: "Approval Queue",
+      healthy: tasks.filter((t) => t.needsApproval && !t.approved).length === 0,
+      detail: `${tasks.filter((t) => t.needsApproval && !t.approved).length} pending`,
+    },
+  ];
+
   return (
-    <main className="mx-auto min-h-screen max-w-6xl p-6 font-sans">
-      <h1 className="text-3xl font-bold">Mission Control v1.5</h1>
-      <p className="mt-2 text-sm opacity-80">Ops + Cron + X Ingestion + Task Board + Memory Explorer</p>
+    <main className="mx-auto min-h-screen max-w-7xl p-6 font-sans">
+      <h1 className="text-3xl font-bold">Mission Control v2 — Ops Backbone</h1>
+      <p className="mt-2 text-sm opacity-80">Jobs + Events + Approval gates + Provenance + Ops panels</p>
+
+      <section className="mt-6 rounded-xl border p-4">
+        <h2 className="text-xl font-semibold">Health Surface</h2>
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+          {healthItems.map((h) => (
+            <div key={h.name} className="rounded border p-3 text-sm">
+              <div className="font-medium">{h.healthy ? "✅" : "⚠️"} {h.name}</div>
+              <div className="mt-1 opacity-80">{h.detail}</div>
+            </div>
+          ))}
+        </div>
+      </section>
 
       <section className="mt-6 rounded-xl border p-4">
         <h2 className="text-xl font-semibold">Ops Status</h2>
@@ -209,18 +278,10 @@ export default function Home() {
                       </div>
                     </div>
                     <div className="flex gap-2">
-                      <button
-                        className="rounded border px-2 py-1"
-                        onClick={() => loadCronRuns(j.id)}
-                        disabled={loading === `cron-runs-${j.id}`}
-                      >
+                      <button className="rounded border px-2 py-1" onClick={() => loadCronRuns(j.id)} disabled={loading === `cron-runs-${j.id}`}>
                         {loading === `cron-runs-${j.id}` ? "Loading..." : "History"}
                       </button>
-                      <button
-                        className="rounded border px-2 py-1"
-                        onClick={() => runCronNow(j.id)}
-                        disabled={loading === `cron-run-${j.id}`}
-                      >
+                      <button className="rounded border px-2 py-1" onClick={() => runCronNow(j.id)} disabled={loading === `cron-run-${j.id}`}>
                         {loading === `cron-run-${j.id}` ? "Running..." : "Run now"}
                       </button>
                     </div>
@@ -235,19 +296,18 @@ export default function Home() {
       </section>
 
       <section className="mt-6 rounded-xl border p-4">
-        <h2 className="text-xl font-semibold">Tasks Board</h2>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <input
-            value={taskTitle}
-            onChange={(e) => setTaskTitle(e.target.value)}
-            placeholder="Add task"
-            className="min-w-72 flex-1 rounded border px-3 py-2"
-          />
+        <h2 className="text-xl font-semibold">Jobs Board</h2>
+        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-6">
+          <input value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} placeholder="Add job" className="rounded border px-3 py-2 md:col-span-2" />
+          <input value={taskSourceUrl} onChange={(e) => setTaskSourceUrl(e.target.value)} placeholder="Source URL (optional)" className="rounded border px-3 py-2 md:col-span-2" />
           <select value={taskOwner} onChange={(e) => setTaskOwner(e.target.value as "Ben" | "Syl")} className="rounded border px-2 py-2">
             <option value="Syl">Syl</option>
             <option value="Ben">Ben</option>
           </select>
-          <button className="rounded bg-black px-3 py-2 text-white" onClick={addTask}>Add</button>
+          <select value={taskPriority} onChange={(e) => setTaskPriority(e.target.value as Task["priority"])} className="rounded border px-2 py-2">
+            {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <button className="rounded bg-black px-3 py-2 text-white md:col-span-6" onClick={addTask}>Add Job</button>
         </div>
 
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-5">
@@ -257,31 +317,36 @@ export default function Home() {
               <div className="mt-2 space-y-2">
                 {(tasksByStatus.get(statusName) || []).map((t) => (
                   <div key={t.id} className="rounded border p-2 text-xs">
-                    <div className="font-medium">{t.title}</div>
+                    <div className="font-medium">[{t.priority}] {t.title}</div>
+                    {t.sourceUrl ? <a className="mt-1 block truncate text-blue-700 underline" href={t.sourceUrl} target="_blank">{t.sourceUrl}</a> : null}
                     <div className="mt-1 opacity-70">Owner: {t.owner}</div>
+                    <div className="mt-1 opacity-70">Approval: {t.needsApproval ? (t.approved ? "✅ approved" : "⏳ pending") : "n/a"}</div>
+                    {t.blockers ? <div className="mt-1 text-amber-700">Blocker: {t.blockers}</div> : null}
+                    {t.outputs.length > 0 ? <div className="mt-1 opacity-80">Outputs: {t.outputs.length}</div> : null}
                     <div className="mt-2 flex flex-wrap gap-1">
-                      <select
-                        value={t.status}
-                        onChange={(e) => updateTask(t.id, { status: e.target.value as Task["status"] })}
-                        className="rounded border px-1 py-0.5"
-                      >
-                        {STATUSES.map((s) => (
-                          <option key={s} value={s}>
-                            {s}
-                          </option>
-                        ))}
+                      <select value={t.status} onChange={(e) => updateTask(t.id, { status: e.target.value as Task["status"] })} className="rounded border px-1 py-0.5">
+                        {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                       </select>
-                      <select
-                        value={t.owner}
-                        onChange={(e) => updateTask(t.id, { owner: e.target.value as "Ben" | "Syl" })}
-                        className="rounded border px-1 py-0.5"
-                      >
-                        <option value="Syl">Syl</option>
-                        <option value="Ben">Ben</option>
+                      <select value={t.priority} onChange={(e) => updateTask(t.id, { priority: e.target.value as Task["priority"] })} className="rounded border px-1 py-0.5">
+                        {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
                       </select>
-                      <button className="rounded border px-1 py-0.5" onClick={() => deleteTask(t.id)}>
-                        Delete
+                      <button className="rounded border px-1 py-0.5" onClick={() => updateTask(t.id, { needsApproval: !t.needsApproval, approved: t.needsApproval ? false : t.approved })}>
+                        {t.needsApproval ? "Remove gate" : "Require approval"}
                       </button>
+                      {t.needsApproval ? (
+                        <button className="rounded border px-1 py-0.5" onClick={() => updateTask(t.id, { approved: !t.approved })}>
+                          {t.approved ? "Unapprove" : "Approve"}
+                        </button>
+                      ) : null}
+                      <button className="rounded border px-1 py-0.5" onClick={() => {
+                        const next = prompt("Blocker notes", t.blockers || "");
+                        if (next !== null) void updateTask(t.id, { blockers: next });
+                      }}>Blocker</button>
+                      <button className="rounded border px-1 py-0.5" onClick={() => {
+                        const next = prompt("Outputs (comma separated URLs/paths)", t.outputs.join(", "));
+                        if (next !== null) void updateTask(t.id, { outputs: next.split(",").map((x) => x.trim()).filter(Boolean) });
+                      }}>Outputs</button>
+                      <button className="rounded border px-1 py-0.5" onClick={() => deleteTask(t.id)}>Delete</button>
                     </div>
                   </div>
                 ))}
@@ -292,23 +357,30 @@ export default function Home() {
       </section>
 
       <section className="mt-6 rounded-xl border p-4">
+        <h2 className="text-xl font-semibold">Run/Event Timeline</h2>
+        <button className="mt-2 rounded border px-3 py-1 text-sm" onClick={loadEvents}>Refresh events</button>
+        <div className="mt-3 max-h-72 space-y-2 overflow-auto text-xs">
+          {events.map((e) => (
+            <div key={e.id} className="rounded border p-2">
+              <div className="font-medium">{e.type} • {new Date(e.at).toLocaleString()}</div>
+              <div className="opacity-80">Job: {e.jobId}</div>
+              <div>{e.message}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="mt-6 rounded-xl border p-4">
         <h2 className="text-xl font-semibold">X Ingestion</h2>
         <div className="mt-3 flex gap-2">
-          <input
-            value={xUrl}
-            onChange={(e) => setXUrl(e.target.value)}
-            placeholder="Paste X URL"
-            className="w-full rounded border px-3 py-2"
-          />
+          <input value={xUrl} onChange={(e) => setXUrl(e.target.value)} placeholder="Paste X URL" className="w-full rounded border px-3 py-2" />
           <button className="rounded bg-black px-3 py-2 text-white" onClick={extractX} disabled={loading === "x" || !xUrl}>
             {loading === "x" ? "Reading..." : "Read"}
           </button>
         </div>
 
         {xResult?.error ? <p className="mt-3 text-sm text-red-600">{xResult.error}</p> : null}
-        {xResult?.text ? (
-          <textarea className="mt-3 h-80 w-full rounded border p-3 text-sm" readOnly value={xResult.text} />
-        ) : null}
+        {xResult?.text ? <textarea className="mt-3 h-80 w-full rounded border p-3 text-sm" readOnly value={xResult.text} /> : null}
       </section>
 
       <section className="mt-6 rounded-xl border p-4">
@@ -319,10 +391,7 @@ export default function Home() {
             <ul className="mt-2 space-y-1 text-sm">
               {memoryFiles.map((f) => (
                 <li key={f}>
-                  <button
-                    className={`w-full rounded border px-2 py-1 text-left ${selectedMemoryPath === f ? "bg-zinc-100" : ""}`}
-                    onClick={() => setSelectedMemoryPath(f)}
-                  >
+                  <button className={`w-full rounded border px-2 py-1 text-left ${selectedMemoryPath === f ? "bg-zinc-100" : ""}`} onClick={() => setSelectedMemoryPath(f)}>
                     {f}
                   </button>
                 </li>
@@ -331,15 +400,8 @@ export default function Home() {
           </div>
           <div>
             <div className="mb-2 flex gap-2">
-              <input
-                value={memoryQuery}
-                onChange={(e) => setMemoryQuery(e.target.value)}
-                placeholder="Search memory..."
-                className="w-full rounded border px-3 py-2"
-              />
-              <button className="rounded border px-3 py-2" onClick={searchMemory}>
-                Search
-              </button>
+              <input value={memoryQuery} onChange={(e) => setMemoryQuery(e.target.value)} placeholder="Search memory..." className="w-full rounded border px-3 py-2" />
+              <button className="rounded border px-3 py-2" onClick={searchMemory}>Search</button>
             </div>
             {memoryHits.length > 0 ? (
               <div className="mb-2 space-y-2 rounded border p-2 text-xs">
