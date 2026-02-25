@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { appendEvent, readJobs, saveJobs, type JobStatus } from "@/lib/jobs-store";
+import { appendDailyMemory, appendEvent, readJobs, saveJobs, type JobStatus } from "@/lib/jobs-store";
 
 export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
@@ -33,7 +33,8 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
   await saveJobs(tasks);
 
   if (prev.status !== tasks[idx].status) {
-    await appendEvent({ jobId: id, type: "status_changed", message: `${prev.status} → ${tasks[idx].status}` });
+    await appendEvent({ jobId: id, type: "status_changed", message: `${prev.status} → ${tasks[idx].status} source=api` });
+    await appendDailyMemory(`Job ${tasks[idx].id} (${tasks[idx].title}) status changed: ${prev.status} -> ${tasks[idx].status}`);
   }
   if (!prev.needsApproval && tasks[idx].needsApproval) {
     await appendEvent({ jobId: id, type: "approval_required", message: "Marked as approval required" });
