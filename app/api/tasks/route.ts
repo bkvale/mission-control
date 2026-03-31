@@ -1,35 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import crypto from "node:crypto";
-
-export type Task = {
-  id: string;
-  title: string;
-  owner: "Ben" | "Syl";
-  status: "Inbox" | "Planned" | "In Progress" | "Waiting" | "Done";
-  createdAt: string;
-};
-
-const dataDir = path.join(process.cwd(), "data");
-const tasksPath = path.join(dataDir, "tasks.json");
-
-async function readTasks(): Promise<Task[]> {
-  try {
-    const raw = await readFile(tasksPath, "utf-8");
-    return JSON.parse(raw) as Task[];
-  } catch {
-    return [];
-  }
-}
-
-async function saveTasks(tasks: Task[]) {
-  await mkdir(dataDir, { recursive: true });
-  await writeFile(tasksPath, JSON.stringify(tasks, null, 2), "utf-8");
-}
+import { appendEvent, readJobs, saveJobs, type Job } from "@/lib/jobs-store";
 
 export async function GET() {
-  const tasks = await readTasks();
+  const tasks = await readJobs();
   return NextResponse.json({ tasks });
 }
 
@@ -37,21 +11,32 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const title = String(body?.title || "").trim();
   const owner = body?.owner === "Ben" ? "Ben" : "Syl";
+  const sourceUrl = String(body?.sourceUrl || "").trim();
+  const priority = ["P0", "P1", "P2", "P3"].includes(body?.priority) ? body.priority : "P2";
 
   if (!title) {
     return NextResponse.json({ error: "Task title is required." }, { status: 400 });
   }
 
-  const tasks = await readTasks();
-  const task: Task = {
+  const tasks = await readJobs();
+  const now = new Date().toISOString();
+  const task: Job = {
     id: crypto.randomUUID(),
     title,
     owner,
+    sourceUrl: sourceUrl || undefined,
+    priority,
     status: "Inbox",
-    createdAt: new Date().toISOString(),
+    outputs: [],
+    blockers: "",
+    needsApproval: false,
+    approved: false,
+    createdAt: now,
+    updatedAt: now,
   };
 
   tasks.unshift(task);
-  await saveTasks(tasks);
+  await saveJobs(tasks);
+  await appendEvent({ jobId: task.id, type: "created", message: `Created job: ${task.title}` });
   return NextResponse.json({ task });
 }
